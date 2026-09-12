@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from app.core.config import get_settings
@@ -40,34 +40,72 @@ def _create_oauth_flow(redirect_uri: Optional[str] = None) -> Flow:
 def login(state: Optional[str] = None):
     """
     GET /api/auth/login
-    Generates the Google OAuth authorization URL requesting scopes for Gmail, Calendar, and profile,
-    and redirects the user directly to Google's consent screen.
+    Generates the Google OAuth authorization URL requesting scopes for Gmail, Calendar, and profile.
+    Stores the generated OAuth 'state' and PKCE 'code_verifier' in secure HTTP-only cookies.
     """
     flow = _create_oauth_flow()
-    authorization_url, _ = flow.authorization_url(
+    authorization_url, generated_state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
         state=state or "jerry_auth",
     )
-    return RedirectResponse(url=authorization_url)
+
+    response = RedirectResponse(url=authorization_url)
+
+    # Store state and code_verifier in HTTP-only cookies
+    response.set_cookie(
+        key="oauth_state",
+        value=generated_state,
+        httponly=True,
+        secure=False,  # Allow localhost development; secure headers work across modern browsers
+        samesite="lax",
+        max_age=600,  # 10 minutes expiry
+    )
+
+    if flow.code_verifier:
+        response.set_cookie(
+            key="oauth_code_verifier",
+            value=flow.code_verifier,
+            httponly=True,
+            secure=False,
+            samesite="lax",
+            max_age=600,
+        )
+
+    return response
 
 
 @router.get("/callback")
 def oauth2_callback(
+    request: Request,
     code: str = Query(..., description="Authorization code from Google"),
     state: Optional[str] = Query(None),
 ):
     """
     GET /api/auth/callback
-    Handles the OAuth2 redirect code, exchanges it for access/refresh tokens,
-    retrieves the user's Google profile, and saves the tokens to the Supabase users table.
+    Handles the OAuth2 redirect code, restores state and code_verifier from cookies,
+    fetches the tokens, saves them in Supabase, and clears the authentication cookies.
     """
     settings = get_settings()
     supabase = get_supabase_client()
 
+    # Extract stored state and code_verifier from cookies
+    cookie_state = request.cookies.get("oauth_state")
+    code_verifier = request.cookies.get("oauth_code_verifier")
+
+    # Validate state if provided
+    expected_state = cookie_state or state
+
     try:
         flow = _create_oauth_flow()
+        if expected_state:
+            flow.state = expected_state
+
+        # Reassign code_verifier before fetching token
+        if code_verifier:
+            flow.code_verifier = code_verifier
+
         flow.fetch_token(code=code)
         credentials = flow.credentials
 
@@ -115,13 +153,18 @@ def oauth2_callback(
             }).execute()
             user_id = insert_res.data[0]["id"] if insert_res.data else None
 
-        # Return status or redirect to frontend dashboard if running
-        return {
+        # Build response and delete cookies
+        response = JSONResponse({
             "status": "authenticated",
             "message": "Google OAuth2 authorization successful.",
             "email": email,
             "user_id": user_id,
-        }
+        })
+
+        response.delete_cookie(key="oauth_state")
+        response.delete_cookie(key="oauth_code_verifier")
+
+        return response
 
     except HTTPException:
         raise
