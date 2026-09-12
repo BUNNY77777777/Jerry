@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -98,7 +99,10 @@ def oauth2_callback(
     expected_state = cookie_state or state
 
     try:
-        flow = _create_oauth_flow()
+        redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI") or settings.GOOGLE_REDIRECT_URI
+        flow = _create_oauth_flow(redirect_uri=redirect_uri)
+        flow.redirect_uri = redirect_uri
+
         if expected_state:
             flow.state = expected_state
 
@@ -106,7 +110,16 @@ def oauth2_callback(
         if code_verifier:
             flow.code_verifier = code_verifier
 
-        flow.fetch_token(code=code)
+        # Fix Render/reverse proxy HTTP scheme mismatch by forcing https
+        raw_url = str(request.url)
+        if raw_url.startswith("http://") and "localhost" not in raw_url and "127.0.0.1" not in raw_url:
+            secure_url = raw_url.replace("http://", "https://", 1)
+        elif raw_url.startswith("http://") and not redirect_uri.startswith("http://"):
+            secure_url = raw_url.replace("http://", "https://", 1)
+        else:
+            secure_url = raw_url
+
+        flow.fetch_token(authorization_response=secure_url)
         credentials = flow.credentials
 
         # Retrieve user profile from Google OAuth2
