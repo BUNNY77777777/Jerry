@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
+from typing import Optional
 from langchain_core.messages import HumanMessage
 from app.agent.graph import agent_app
 
@@ -7,8 +8,9 @@ router = APIRouter(prefix="/api/command", tags=["Command"])
 
 
 class CommandRequest(BaseModel):
-    prompt: str
-    user_id: str
+    prompt: Optional[str] = None
+    message: Optional[str] = None
+    user_id: Optional[str] = "default-user"
 
 
 class CommandResponse(BaseModel):
@@ -18,9 +20,12 @@ class CommandResponse(BaseModel):
 
 @router.post("", response_model=CommandResponse)
 def handle_command(payload: CommandRequest):
+    user_prompt = payload.prompt or payload.message or "Hello"
+    current_user_id = payload.user_id or "default-user"
+    
     result = agent_app.invoke(
-        {"messages": [HumanMessage(content=payload.prompt)]},
-        config={"configurable": {"user_id": payload.user_id}}
+        {"messages": [HumanMessage(content=user_prompt)]},
+        config={"configurable": {"user_id": current_user_id}}
     )
     ai_response = result["messages"][-1].content
     return CommandResponse(
