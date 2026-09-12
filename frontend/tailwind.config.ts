@@ -12,6 +12,8 @@ const config: Config = {
         navy: "#001F3F",
         "primary-navy": "#001F3F",
         "primary-white": "#FFFFFF",
+        "brand-navy": "#001F3F",
+        "brand-white": "#FFFFFF",
       },
       fontFamily: {
         serif: ["var(--font-cormorant)", "serif"],
