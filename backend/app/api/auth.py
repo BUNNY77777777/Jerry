@@ -11,6 +11,9 @@ from app.core.google_auth import GOOGLE_OAUTH_SCOPES, get_user_credentials
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
+# Global dictionary to store OAuth state and code_verifier temporarily
+oauth_state_store = {}
+
 
 def _create_oauth_flow(redirect_uri: Optional[str] = None) -> Flow:
     settings = get_settings()
@@ -52,9 +55,10 @@ def login(request: Request, state: Optional[str] = None):
         state=state or "jerry_auth",
     )
 
-    # Store state and code_verifier in Starlette session
-    request.session["state"] = generated_state
-    request.session["code_verifier"] = getattr(flow, "code_verifier", None)
+    # Store state and code_verifier in global memory to bypass proxy issues
+    if getattr(flow, "code_verifier", None):
+        oauth_state_store[generated_state] = getattr(flow, "code_verifier")
+
 
     return RedirectResponse(url=authorization_url)
 
@@ -73,22 +77,20 @@ def oauth2_callback(
     settings = get_settings()
     supabase = get_supabase_client()
 
-    # Extract stored state and code_verifier from session (fallback to cookies or query if needed)
-    session_state = request.session.get("state")
-    session_verifier = request.session.get("code_verifier")
-    expected_state = session_state or request.cookies.get("oauth_state") or state
-
     try:
         redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI") or settings.GOOGLE_REDIRECT_URI
         flow = _create_oauth_flow(redirect_uri=redirect_uri)
         flow.redirect_uri = redirect_uri
 
+        # Extract state from query params (which is already bound to the 'state' arg)
+        expected_state = state or request.query_params.get("state")
+
         if expected_state:
             flow.state = expected_state
 
-        # Reassign code_verifier from session before fetching token
-        if request.session.get("code_verifier"):
-            flow.code_verifier = request.session.get("code_verifier")
+        # Retrieve and pop the code_verifier from the global dictionary
+        if expected_state in oauth_state_store:
+            flow.code_verifier = oauth_state_store.pop(expected_state)
         elif request.cookies.get("oauth_code_verifier"):
             flow.code_verifier = request.cookies.get("oauth_code_verifier")
 
@@ -149,8 +151,10 @@ def oauth2_callback(
             user_id = insert_res.data[0]["id"] if insert_res.data else None
 
         # Clean session and return response
-        request.session.pop("state", None)
-        request.session.pop("code_verifier", None)
+        if "state" in request.session:
+            request.session.pop("state", None)
+        if "code_verifier" in request.session:
+            request.session.pop("code_verifier", None)
 
         response = JSONResponse({
             "status": "authenticated",
