@@ -40,21 +40,17 @@ def _create_oauth_flow(redirect_uri: Optional[str] = None) -> Flow:
 def login(state: Optional[str] = None):
     """
     GET /api/auth/login
-    Generates the Google OAuth authorization URL requesting scopes for Gmail, Calendar, and profile.
+    Generates the Google OAuth authorization URL requesting scopes for Gmail, Calendar, and profile,
+    and redirects the user directly to Google's consent screen.
     """
-    settings = get_settings()
     flow = _create_oauth_flow()
-    authorization_url, generated_state = flow.authorization_url(
+    authorization_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
         state=state or "jerry_auth",
     )
-    return {
-        "authorization_url": authorization_url,
-        "state": generated_state,
-        "scopes": GOOGLE_OAUTH_SCOPES,
-    }
+    return RedirectResponse(url=authorization_url)
 
 
 @router.get("/callback")
