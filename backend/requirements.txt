@@ -9,3 +9,4 @@ pgvector
 python-dotenv
 google-auth-oauthlib
 google-api-python-client
+itsdangerous

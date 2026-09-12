@@ -38,11 +38,11 @@ def _create_oauth_flow(redirect_uri: Optional[str] = None) -> Flow:
 
 
 @router.get("/login")
-def login(state: Optional[str] = None):
+def login(request: Request, state: Optional[str] = None):
     """
     GET /api/auth/login
     Generates the Google OAuth authorization URL requesting scopes for Gmail, Calendar, and profile.
-    Stores the generated OAuth 'state' and PKCE 'code_verifier' in secure HTTP-only cookies.
+    Stores the generated OAuth 'state' and PKCE 'code_verifier' in request.session.
     """
     flow = _create_oauth_flow()
     authorization_url, generated_state = flow.authorization_url(
@@ -52,29 +52,11 @@ def login(state: Optional[str] = None):
         state=state or "jerry_auth",
     )
 
-    response = RedirectResponse(url=authorization_url)
+    # Store state and code_verifier in Starlette session
+    request.session["state"] = generated_state
+    request.session["code_verifier"] = getattr(flow, "code_verifier", None)
 
-    # Store state and code_verifier in HTTP-only cookies
-    response.set_cookie(
-        key="oauth_state",
-        value=generated_state,
-        httponly=True,
-        secure=False,  # Allow localhost development; secure headers work across modern browsers
-        samesite="lax",
-        max_age=600,  # 10 minutes expiry
-    )
-
-    if flow.code_verifier:
-        response.set_cookie(
-            key="oauth_code_verifier",
-            value=flow.code_verifier,
-            httponly=True,
-            secure=False,
-            samesite="lax",
-            max_age=600,
-        )
-
-    return response
+    return RedirectResponse(url=authorization_url)
 
 
 @router.get("/callback")
@@ -85,18 +67,16 @@ def oauth2_callback(
 ):
     """
     GET /api/auth/callback
-    Handles the OAuth2 redirect code, restores state and code_verifier from cookies,
-    fetches the tokens, saves them in Supabase, and clears the authentication cookies.
+    Handles the OAuth2 redirect code, restores state and code_verifier from request.session,
+    fetches the tokens, saves them in Supabase, and clears the session state.
     """
     settings = get_settings()
     supabase = get_supabase_client()
 
-    # Extract stored state and code_verifier from cookies
-    cookie_state = request.cookies.get("oauth_state")
-    code_verifier = request.cookies.get("oauth_code_verifier")
-
-    # Validate state if provided
-    expected_state = cookie_state or state
+    # Extract stored state and code_verifier from session (fallback to cookies or query if needed)
+    session_state = request.session.get("state")
+    session_verifier = request.session.get("code_verifier")
+    expected_state = session_state or request.cookies.get("oauth_state") or state
 
     try:
         redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI") or settings.GOOGLE_REDIRECT_URI
@@ -106,9 +86,11 @@ def oauth2_callback(
         if expected_state:
             flow.state = expected_state
 
-        # Reassign code_verifier before fetching token
-        if code_verifier:
-            flow.code_verifier = code_verifier
+        # Reassign code_verifier from session before fetching token
+        if request.session.get("code_verifier"):
+            flow.code_verifier = request.session.get("code_verifier")
+        elif request.cookies.get("oauth_code_verifier"):
+            flow.code_verifier = request.cookies.get("oauth_code_verifier")
 
         # Fix Render/reverse proxy HTTP scheme mismatch by forcing https
         raw_url = str(request.url)
@@ -166,7 +148,10 @@ def oauth2_callback(
             }).execute()
             user_id = insert_res.data[0]["id"] if insert_res.data else None
 
-        # Build response and delete cookies
+        # Clean session and return response
+        request.session.pop("state", None)
+        request.session.pop("code_verifier", None)
+
         response = JSONResponse({
             "status": "authenticated",
             "message": "Google OAuth2 authorization successful.",

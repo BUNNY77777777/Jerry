@@ -20,6 +20,11 @@ app.add_middleware(
 )
 
 
+from starlette.middleware.sessions import SessionMiddleware
+
+# Session middleware configuration for OAuth2 PKCE state
+app.add_middleware(SessionMiddleware, secret_key="jerry-secure-session-key")
+
 from app.api.auth import router as auth_router
 
 app.include_router(auth_router)
