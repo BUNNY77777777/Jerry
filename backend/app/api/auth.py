@@ -183,11 +183,16 @@ def auth_status(user_id: Optional[str] = Query(None), email: Optional[str] = Que
     try:
         creds = get_user_credentials(user_id=user_id, user_email=email)
         if creds and (creds.valid or creds.refresh_token):
+            # Fetch user email if available
+            supabase = get_supabase_client()
+            user_res = supabase.table("users").select("email, full_name").order("updated_at", desc=True).limit(1).execute()
+            user_email_found = user_res.data[0].get("email") if user_res.data else email
             return {
                 "authenticated": True,
                 "token_expired": creds.expired,
                 "has_refresh_token": bool(creds.refresh_token),
                 "scopes": creds.scopes,
+                "email": user_email_found,
             }
         return {
             "authenticated": False,

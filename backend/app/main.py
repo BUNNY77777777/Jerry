@@ -11,9 +11,14 @@ app = FastAPI(
 )
 
 # CORS middleware configuration
+origins = [
+    "http://localhost:3000",
+    "https://jerry-t5rd.onrender.com",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -26,8 +31,10 @@ from starlette.middleware.sessions import SessionMiddleware
 app.add_middleware(SessionMiddleware, secret_key="jerry-secure-session-key")
 
 from app.api.auth import router as auth_router
+from app.api.command import router as command_router
 
 app.include_router(auth_router)
+app.include_router(command_router)
 
 
 @app.get("/health")
